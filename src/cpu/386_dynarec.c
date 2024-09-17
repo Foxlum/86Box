@@ -274,12 +274,11 @@ exec386_dynarec_int(void)
 {
     cpu_block_end = 0;
     x86_was_reset = 0;
-
-#    ifdef USE_DEBUG_REGS_486
-    if (trap & 2) {
-#    else
-    if (trap == 2) {
-#    endif
+    #ifdef USE_DEBUG_REGS_486
+    if (UNLIKELY(trap & 2)) {
+    #else
+    if (UNLIKELY(trap == 2)) {
+    #    endif
         /* Handle the T bit in the new TSS first. */
         CPU_BLOCK_END();
         goto block_ended;
@@ -309,7 +308,7 @@ exec386_dynarec_int(void)
             x386_dynarec_log("[%04X:%08X] fetchdat = %08X\n", CS, cpu_state.pc, fetchdat);
 #    endif
 
-        if (!cpu_state.abrt) {
+        if (LIKELY(!cpu_state.abrt)) {
             opcode = fetchdat & 0xFF;
             fetchdat >>= 8;
 
@@ -341,27 +340,27 @@ exec386_dynarec_int(void)
         }
 #    endif
 
-        if (((cs + cpu_state.pc) >> 12) != pccache)
+        if (UNLIKELY(((cs + cpu_state.pc) >> 12) != pccache))
             CPU_BLOCK_END();
 
-        if (cpu_end_block_after_ins) {
+        if (UNLIKELY(cpu_end_block_after_ins)) {
             cpu_end_block_after_ins--;
             if (!cpu_end_block_after_ins)
                 CPU_BLOCK_END();
         }
 
-        if (cpu_init)
+        if (UNLIKELY(cpu_init))
             CPU_BLOCK_END();
 
-        if (cpu_state.abrt)
+        if (UNLIKELY(cpu_state.abrt))
             CPU_BLOCK_END();
-        if (smi_line)
+        if (UNLIKELY(smi_line))
             CPU_BLOCK_END();
-        else if (trap)
+        else if (UNLIKELY(trap))
             CPU_BLOCK_END();
-        else if (nmi && nmi_enable && nmi_mask)
+        else if (UNLIKELY(nmi && nmi_enable && nmi_mask))
             CPU_BLOCK_END();
-        else if ((cpu_state.flags & I_FLAG) && pic.int_pending && !cpu_end_block_after_ins)
+        else if (UNLIKELY((cpu_state.flags & I_FLAG) && pic.int_pending && !cpu_end_block_after_ins))
             CPU_BLOCK_END();
     }
 
@@ -386,12 +385,16 @@ block_ended:
     cpu_end_block_after_ins = 0;
 }
 
+
+#define LIKELY(x) __builtin_expect(!!(x), 1)
+#define UNLIKELY(x) __builtin_expect(!!(x), 0)
+
 static __inline void
 exec386_dynarec_dyn(void)
 {
-    uint32_t start_pc  = 0;
+    CACHE_ALIGN uint32_t start_pc = 0;
     uint32_t phys_addr = get_phys(cs + cpu_state.pc);
-    int      hash      = HASH(phys_addr);
+    int hash = HASH(phys_addr);
 #    ifdef USE_NEW_DYNAREC
     codeblock_t *block = &codeblock[codeblock_hash[hash]];
 #    else
@@ -400,22 +403,26 @@ exec386_dynarec_dyn(void)
     int valid_block = 0;
 
 #    ifdef USE_NEW_DYNAREC
-    if (!cpu_state.abrt)
+    if (LIKELY(!cpu_state.abrt))
 #    else
-    if (block && !cpu_state.abrt)
+    if (LIKELY(block && !cpu_state.abrt))
 #    endif
     {
-        page_t *page = &pages[phys_addr >> 12];
-
+        CACHE_ALIGN page_t *page = &pages[phys_addr >> 12];
         /* Block must match current CS, PC, code segment size,
            and physical address. The physical address check will
            also catch any page faults at this stage */
-        valid_block = (block->pc == cs + cpu_state.pc) && (block->_cs == cs) && (block->phys == phys_addr) && !((block->status ^ cpu_cur_status) & CPU_STATUS_FLAGS) && ((block->status & cpu_cur_status & CPU_STATUS_MASK) == (cpu_cur_status & CPU_STATUS_MASK));
-        if (!valid_block) {
+        valid_block = (block->pc == cs + cpu_state.pc) && 
+                      (block->_cs == cs) && 
+                      (block->phys == phys_addr) && 
+                      !((block->status ^ cpu_cur_status) & CPU_STATUS_FLAGS) && 
+                      ((block->status & cpu_cur_status & CPU_STATUS_MASK) == (cpu_cur_status & CPU_STATUS_MASK));
+
+        if (UNLIKELY(!valid_block)) {
             uint64_t mask = (uint64_t) 1 << ((phys_addr >> PAGE_MASK_SHIFT) & PAGE_MASK_MASK);
 #    ifdef USE_NEW_DYNAREC
-            int      byte_offset = (phys_addr >> PAGE_BYTE_MASK_SHIFT) & PAGE_BYTE_MASK_OFFSET_MASK;
-            uint64_t byte_mask   = 1ULL << (PAGE_BYTE_MASK_MASK & 0x3f);
+            int byte_offset = (phys_addr >> PAGE_BYTE_MASK_SHIFT) & PAGE_BYTE_MASK_OFFSET_MASK;
+            uint64_t byte_mask = 1ULL << (PAGE_BYTE_MASK_MASK & 0x3f);
 
             if ((page->code_present_mask & mask) ||
                 ((page->mem != page_ff) && (page->byte_code_present_mask[byte_offset] & byte_mask)))
@@ -423,11 +430,14 @@ exec386_dynarec_dyn(void)
             if (page->code_present_mask[(phys_addr >> PAGE_MASK_INDEX_SHIFT) & PAGE_MASK_INDEX_MASK] & mask)
 #    endif
             {
-                /* Walk page tree to see if we find the correct block */
                 codeblock_t *new_block = codeblock_tree_find(phys_addr, cs);
-                if (new_block) {
-                    valid_block = (new_block->pc == cs + cpu_state.pc) && (new_block->_cs == cs) && (new_block->phys == phys_addr) && !((new_block->status ^ cpu_cur_status) & CPU_STATUS_FLAGS) && ((new_block->status & cpu_cur_status & CPU_STATUS_MASK) == (cpu_cur_status & CPU_STATUS_MASK));
-                    if (valid_block) {
+                if (LIKELY(new_block)) {
+                    valid_block = (new_block->pc == cs + cpu_state.pc) && 
+                                  (new_block->_cs == cs) && 
+                                  (new_block->phys == phys_addr) && 
+                                  !((new_block->status ^ cpu_cur_status) & CPU_STATUS_FLAGS) && 
+                                  ((new_block->status & cpu_cur_status & CPU_STATUS_MASK) == (cpu_state.flags & CPU_STATUS_MASK));
+                    if (LIKELY(valid_block)) {
                         block = new_block;
 #    ifdef USE_NEW_DYNAREC
                         codeblock_hash[hash] = get_block_nr(block);
@@ -437,72 +447,18 @@ exec386_dynarec_dyn(void)
             }
         }
 
-        if (valid_block && (block->page_mask & *block->dirty_mask)) {
+        if (LIKELY(valid_block && (block->page_mask & *block->dirty_mask))) {
 #    ifdef USE_NEW_DYNAREC
             codegen_check_flush(page, page->dirty_mask, phys_addr);
-            if (block->pc == BLOCK_PC_INVALID)
+            if (UNLIKELY(block->pc == BLOCK_PC_INVALID))
                 valid_block = 0;
             else if (block->flags & CODEBLOCK_IN_DIRTY_LIST)
                 block->flags &= ~CODEBLOCK_WAS_RECOMPILED;
 #    else
             codegen_check_flush(page, page->dirty_mask[(phys_addr >> 10) & 3], phys_addr);
             page->dirty_mask[(phys_addr >> 10) & 3] = 0;
-            if (!block->valid)
+            if (UNLIKELY(!block->valid))
                 valid_block = 0;
-#    endif
-        }
-        if (valid_block && block->page_mask2) {
-            /* We don't want the second page to cause a page
-               fault at this stage - that would break any
-               code crossing a page boundary where the first
-               page is present but the second isn't. Instead
-               allow the first page to be interpreted and for
-               the page fault to occur when the page boundary
-               is actually crossed.*/
-#    ifdef USE_NEW_DYNAREC
-            uint32_t phys_addr_2 = get_phys_noabrt(block->pc + ((block->flags & CODEBLOCK_BYTE_MASK) ? 0x40 : 0x400));
-#    else
-            uint32_t phys_addr_2 = get_phys_noabrt(block->endpc);
-#    endif
-            page_t *page_2 = &pages[phys_addr_2 >> 12];
-
-            if ((block->phys_2 ^ phys_addr_2) & ~0xfff)
-                valid_block = 0;
-            else if (block->page_mask2 & *block->dirty_mask2) {
-#    ifdef USE_NEW_DYNAREC
-                codegen_check_flush(page_2, page_2->dirty_mask, phys_addr_2);
-                if (block->pc == BLOCK_PC_INVALID)
-                    valid_block = 0;
-                else if (block->flags & CODEBLOCK_IN_DIRTY_LIST)
-                    block->flags &= ~CODEBLOCK_WAS_RECOMPILED;
-#    else
-                codegen_check_flush(page_2, page_2->dirty_mask[(phys_addr_2 >> 10) & 3], phys_addr_2);
-                page_2->dirty_mask[(phys_addr_2 >> 10) & 3] = 0;
-                if (!block->valid)
-                    valid_block = 0;
-#    endif
-            }
-        }
-#    ifdef USE_NEW_DYNAREC
-        if (valid_block && (block->flags & CODEBLOCK_IN_DIRTY_LIST)) {
-            block->flags &= ~CODEBLOCK_WAS_RECOMPILED;
-            if (block->flags & CODEBLOCK_BYTE_MASK)
-                block->flags |= CODEBLOCK_NO_IMMEDIATES;
-            else
-                block->flags |= CODEBLOCK_BYTE_MASK;
-        }
-        if (valid_block && (block->flags & CODEBLOCK_WAS_RECOMPILED) && (block->flags & CODEBLOCK_STATIC_TOP) && block->TOP != (cpu_state.TOP & 7))
-#    else
-        if (valid_block && block->was_recompiled && (block->flags & CODEBLOCK_STATIC_TOP) && block->TOP != cpu_state.TOP)
-#    endif
-        {
-            /* FPU top-of-stack does not match the value this block was compiled
-               with, re-compile using dynamic top-of-stack*/
-#    ifdef USE_NEW_DYNAREC
-            block->flags &= ~(CODEBLOCK_STATIC_TOP | CODEBLOCK_WAS_RECOMPILED);
-#    else
-            block->flags &= ~CODEBLOCK_STATIC_TOP;
-            block->was_recompiled = 0;
 #    endif
         }
     }

@@ -93,7 +93,7 @@ main_thread_fn()
 {
     int      frames;
 
-    QThread::currentThread()->setPriority(QThread::HighestPriority);
+    // QThread::currentThread()->setPriority(QThread::HighestPriority);
     plat_set_thread_name(nullptr, "main_thread_fn");
     framecountx = 0;
     // title_update = 1;
@@ -112,8 +112,7 @@ main_thread_fn()
         if (drawits > 0 && !dopause) {
             /* Yes, so do one frame now. */
             drawits -= 10;
-            if (drawits > 50)
-                drawits = 0;
+            drawits = std::min(drawits, 50);
 
 #ifdef USE_INSTRUMENT
             uint64_t start_time = elapsed_timer.nsecsElapsed();
@@ -149,7 +148,7 @@ main_thread_fn()
             if (dopause)
                 ack_pause();
 
-            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            // std::this_thread::sleep_for(std::chrono::milliseconds(1));
         }
     }
 
@@ -369,7 +368,7 @@ main(int argc, char *argv[])
     QObject::connect(&onesec, &QTimer::timeout, &app, [] {
         pc_onesec();
     });
-    onesec.setTimerType(Qt::PreciseTimer);
+    onesec.setTimerType(Qt::CoarseTimer);
     onesec.start(1000);
 
 #ifdef DISCORD
